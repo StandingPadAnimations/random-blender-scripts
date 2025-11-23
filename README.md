@@ -8,5 +8,6 @@ Just some random Blender scripts/addons I've made in the past that are too small
   can be packed in a blend file like most other external assets
 - `unwrap_selected.py` - A script that unwraps selected objets with cube projection; if an object is an instance
   collection, it'll go through the source collection and unwrap it as well
+  - `unwrap_selected_addon.py` is the addon version, which adds a button in `Tool` panel
 - `OptimizeImages.py` - A script that goes through all the materials on the selected object(s), and for every texture
   used in their materials averages the color and replaces the texture with a single pixel image of the averaged color
