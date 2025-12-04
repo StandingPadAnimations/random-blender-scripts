@@ -131,9 +131,7 @@ class UNWRAP_OT_unwrap_selected(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context):
         selected = (obj for obj in bpy.context.selected_objects)
-        active = bpy.context.view_layer.objects.active
 
-        bpy.ops.object.select_all(action="DESELECT")
         for obj in selected:
             # Get the "instance collection"
             coll = obj.instance_collection
@@ -179,10 +177,6 @@ class UNWRAP_OT_unwrap_selected(bpy.types.Operator):
             # Delete the new scene created for modifying
             # instance collection
             bpy.ops.scene.delete()
-
-        for obj in selected:
-            obj.select_set(True)
-        bpy.context.view_layer.objects.active = active
 
         return {"FINISHED"}
 

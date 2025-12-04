@@ -18,7 +18,6 @@ import bmesh
 import mathutils
 
 SELECTED = (obj for obj in bpy.context.selected_objects)
-ACTIVE = bpy.context.view_layer.objects.active
 
 
 # The cube projection code is a translation of
@@ -125,6 +124,7 @@ def unwrap_instance_collection() -> None:
     for obj in selected_instance:
         if obj.type != "MESH":
             continue
+
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         has_selection = any(f.select for f in bm.faces)
