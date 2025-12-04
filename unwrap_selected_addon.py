@@ -14,17 +14,115 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import bpy
+import bmesh
+import mathutils
 
 bl_info = {
     "name": "Unwrap Selected",
     "category": "Object",
-    "version": (1, 0, 0),
+    "version": (2, 0, 0),
     "blender": (5, 0, 0),
     "location": "3D window toolshelf > Tool",
     "description": "Simple addon to unwrap all selected objects, including collection instances",
     "author": "Maryam Sheikh <mahid@standingpad.org>",
     "tracker_url": "https://github.com/StandingPadAnimations/random-blender-scripts/issues",
 }
+
+
+# The cube projection code is a translation of
+# Blender's C++ code to Python, done by Gemini
+#
+# Reference
+# https://projects.blender.org/blender/blender/src/commit/e1e3e7e50694de20a3bac6889867ecc770305e2c/source/blender/editors/uvedit/uvedit_unwrap_ops.cc#L4181-L4227
+#
+# We have our own implementation of the operator to
+# performance issues associated with using operators
+# upon operators. This also (in theory) opens up the
+# door for parallel processing of meshes, though that
+# may not be necessary.
+#
+# In testing, this is virtually identical results wise
+# to the built-in cube projection
+def get_dominant_axis_indices(normal: mathutils.Vector) -> tuple[int, int]:
+    """
+    Determines which axes (x, y) to use for projection based on the
+    largest component of the face normal.
+    """
+    abs_x = abs(normal.x)
+    abs_y = abs(normal.y)
+    abs_z = abs(normal.z)
+
+    # Replicating BLI_math_geom.c logic
+    if abs_x > abs_y:
+        if abs_x > abs_z:
+            return 1, 2  # X is dominant, project on Y, Z
+        else:
+            return 0, 1  # Z is dominant, project on X, Y
+    else:
+        if abs_y > abs_z:
+            return 0, 2  # Y is dominant, project on X, Z
+        else:
+            return 0, 1  # Z is dominant, project on X, Y
+
+
+def calculate_selection_center(
+    bm: bmesh.types.BMesh, use_select: bool
+) -> mathutils.Vector:
+    """Calculates the average center of selected faces to use as the projection pivot."""
+    total_co = mathutils.Vector((0.0, 0.0, 0.0))
+    count = 0
+
+    for face in bm.faces:
+        if use_select and not face.select:
+            continue
+        # Use face center (centroid) for average
+        total_co += face.calc_center_median()
+        count += 1
+
+    if count == 0:
+        return mathutils.Vector((0.0, 0.0, 0.0))
+
+    return total_co / count
+
+
+def cube_project(
+    bm: bmesh.types.BMesh,
+    cube_size: float = 1.0,
+    use_select: bool = True,
+    center: mathutils.Vector | None = None,
+) -> None:
+    """
+    Python equivalent of Blender's Cube Projection operator, so
+    we don't have to use operators (and their performance impact)
+    """
+    loc = center
+    if center is None:
+        loc = calculate_selection_center(bm, use_select)
+
+    # Prevent division by zero
+    if cube_size == 0.0:
+        cube_size = 1.0
+
+    scale_inv = 1.0 / cube_size
+    uv_layer = bm.loops.layers.uv.verify()
+
+    for face in bm.faces:
+        if use_select and not face.select:
+            continue
+
+        # Determine which plane to map this face onto
+        cox, coy = get_dominant_axis_indices(face.normal)
+
+        for loop in face.loops:
+            co = loop.vert.co
+            loop_uv = loop[uv_layer]
+
+            # Project coordinate to 0-1 UV space
+            # 0.5 centers the projection on the UV tile
+            u = 0.5 + ((co[cox] - loc[cox]) * scale_inv)
+            v = 0.5 + ((co[coy] - loc[coy]) * scale_inv)
+
+            loop_uv.uv = (u, v)
 
 
 class UNWRAP_OT_unwrap_selected(bpy.types.Operator):
@@ -43,7 +141,17 @@ class UNWRAP_OT_unwrap_selected(bpy.types.Operator):
             if not coll:
                 if obj.type != "MESH":
                     continue
-                self.unwrap_mesh(obj)
+
+                bm = bmesh.new()
+                bm.from_mesh(obj.data)
+                has_selection = any(f.select for f in bm.faces)
+
+                cube_project(bm, 1.0, has_selection, center=None)
+
+                bm.to_mesh(obj.data)
+                bm.free()
+                obj.data.update()
+
                 continue
 
             # Copied from here:
@@ -78,16 +186,6 @@ class UNWRAP_OT_unwrap_selected(bpy.types.Operator):
 
         return {"FINISHED"}
 
-    def unwrap_mesh(self, obj) -> None:
-        """Unwrap mesh with cube projection"""
-        obj.select_set(True)
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode="EDIT")
-        bpy.ops.mesh.select_all(action="SELECT")
-        bpy.ops.uv.cube_project()
-        bpy.ops.object.mode_set(mode="OBJECT")
-        obj.select_set(False)
-
     def unwrap_instance_collection(self) -> None:
         bpy.ops.object.select_all(action="SELECT")
         selected_instance = (obj for obj in bpy.context.selected_objects)
@@ -96,7 +194,16 @@ class UNWRAP_OT_unwrap_selected(bpy.types.Operator):
         for obj in selected_instance:
             if obj.type != "MESH":
                 continue
-            self.unwrap_mesh(obj)
+
+            bm = bmesh.new()
+            bm.from_mesh(obj.data)
+            has_selection = any(f.select for f in bm.faces)
+
+            cube_project(bm, 1.0, has_selection, center=None)
+
+            bm.to_mesh(obj.data)
+            bm.free()
+            obj.data.update()
 
 
 class UNWRAP_PT_unwrap_selected(bpy.types.Panel):
