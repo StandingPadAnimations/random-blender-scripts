@@ -17,7 +17,7 @@ import enum
 
 import bpy
 import bmesh
-import mathutils
+from mathutils import Matrix, Vector
 
 SELECTED = (obj for obj in bpy.context.selected_objects)
 
@@ -44,11 +44,10 @@ SELECTED = (obj for obj in bpy.context.selected_objects)
 INIT_MIN = 1.0e30
 INIT_MAX = -1.0e30
 
-INIT_MINMAX = ((INIT_MIN, INIT_MIN, INIT_MIN), (INIT_MAX, INIT_MAX, INIT_MAX))
-INIT_MINMAX2 = ((INIT_MIN, INIT_MIN), (INIT_MAX, INIT_MAX))
-
-FloatBounds3 = tuple[float, float, float]
-FloatBounds2x3 = tuple[FloatBounds3, FloatBounds3]
+INIT_MINMAX = (
+    Vector((INIT_MIN, INIT_MIN, INIT_MIN)),
+    Vector((INIT_MAX, INIT_MAX, INIT_MAX)),
+)
 
 
 class V3DAround(enum.Enum):
@@ -61,68 +60,57 @@ class V3DAround(enum.Enum):
 
 def get_v3d_pivot() -> V3DAround:
     """Return the current pivot in View3D."""
-    match bpy.context.scene.tool_settings.transform_pivot_point:
-        case "MEDIAN_POINT":
-            return V3DAround.CENTER_MEDIAN
-        case "INDIVIDUAL_ORIGINS":
-            return V3DAround.LOCAL_ORIGINS
-        case "ACTIVE_ELEMENT":
-            return V3DAround.ACTIVE
-        case "CURSOR":
-            return V3DAround.CURSOR
-        case "BOUNDING_BOX_CENTER":
-            return V3DAround.CENTER_BOUNDS
+    if bpy.context.scene:
+        match bpy.context.scene.tool_settings.transform_pivot_point:
+            case "MEDIAN_POINT":
+                return V3DAround.CENTER_MEDIAN
+            case "INDIVIDUAL_ORIGINS":
+                return V3DAround.LOCAL_ORIGINS
+            case "ACTIVE_ELEMENT":
+                return V3DAround.ACTIVE
+            case "CURSOR":
+                return V3DAround.CURSOR
+            case "BOUNDING_BOX_CENTER":
+                return V3DAround.CENTER_BOUNDS
     return V3DAround.CENTER_BOUNDS
 
 
-def minmax_v3v3_v3(
-    f_min: FloatBounds3, f_max: FloatBounds3, vec: FloatBounds3
-) -> FloatBounds2x3:
+def minmax_v3v3_v3(f_min: Vector, f_max: Vector, vec: Vector) -> tuple[Vector, Vector]:
     """Translation of Blender's minmax_v3v3_v3 function.
 
     ./source/blender/blenlib/intern/math_vector.cc
     Lines: 716-725
     """
-    new_f_min = (min(f_min[0], vec[0]), min(f_min[1], vec[1]), min(f_min[2], vec[2]))
-    new_f_max = (max(f_max[0], vec[0]), max(f_max[1], vec[1]), max(f_max[2], vec[2]))
+    new_f_min = Vector(
+        (min(f_min[0], vec[0]), min(f_min[1], vec[1]), min(f_min[2], vec[2]))
+    )
+    new_f_max = Vector(
+        (max(f_max[0], vec[0]), max(f_max[1], vec[1]), max(f_max[2], vec[2]))
+    )
 
     return new_f_min, new_f_max
 
 
-def add_v3_v3(r: FloatBounds3, a: FloatBounds3) -> FloatBounds3:
-    """Translation of Blender's add_v3_v3 function.
+def mul_v3_m4v3(mat: Matrix, vec: Vector) -> Vector:
+    """Translation of Blender's mul_v3_m4v3 function.
 
-    ./source/blender/blenlib/intern/math_vector_inline.cc
-    Lines: 280-285
+    ./source/blender/blenlib/intern/math_matrix_c.cc
+    Lines: 674-682
     """
-    return (
-        r[0] + a[0],
-        r[1] + a[1],
-        r[2] + a[2],
+    x = vec[0]
+    y = vec[1]
+    return Vector(
+        (
+            x * mat[0][0] + y * mat[1][0] + mat[2][0] * vec[2] + mat[3][0],
+            x * mat[0][1] + y * mat[1][1] + mat[2][1] * vec[2] + mat[3][1],
+            x * mat[0][2] + y * mat[1][2] + mat[2][2] * vec[2] + mat[3][2],
+        )
     )
 
 
-def sub_v3_v3v3(a: FloatBounds3, b: FloatBounds3) -> FloatBounds3:
-    """Translation of Blender's sub_v3_v3v3 function.
-
-    ./source/blender/blenlib/intern/math_vector_inline.cc
-    Lines: 354-359
-    """
-    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
-
-
-def mul_v3_fl(r: FloatBounds3, f: float) -> FloatBounds3:
-    """Translation of Blender's mul_v3_fl function.
-
-    ./source/blender/blenlib/intern/math_vector_inline.cc
-    Lines: 408-413
-    """
-    return (r[0] * f, r[1] * f, r[2] * f)
-
-
 def BM_face_calc_bounds_expand(
-    bm_face: bmesh.types.BMFace, f_min: FloatBounds3, f_max: FloatBounds3
-) -> FloatBounds2x3:
+    bm_face: bmesh.types.BMFace, f_min: Vector, f_max: Vector
+) -> tuple[Vector, Vector]:
     """Translation of Blender's BM_face_calc_bounds_expand function.
 
     ./source/blender/bmesh/intern/bmesh_polygon.cc
@@ -130,8 +118,23 @@ def BM_face_calc_bounds_expand(
     """
     cur_f_min, cur_f_max = f_min, f_max
     for loop in bm_face.loops:
-        cur_f_min, cur_f_max = minmax_v3v3_v3(cur_f_min, cur_f_max, loop.vert.co)
+        cur_f_min, cur_f_max = minmax_v3v3_v3(f_min, f_max, loop.vert.co)
     return cur_f_min, cur_f_max
+
+
+def BM_editselection_center(
+    ese: bmesh.types.BMVert | bmesh.types.BMEdge | bmesh.types.BMFace,
+) -> Vector:
+    """Translation of Blender's BM_editselection_center function.
+
+    ./source/blender/bmesh/intern/bmesh_marking.cc
+    Lines: 1044-1058
+    """
+    if isinstance(ese, bmesh.types.BMVert):
+        return ese.co
+    elif isinstance(ese, bmesh.types.BMEdge):
+        return 0.5 * (ese.verts[0].co + ese.verts[1].co)
+    return ese.calc_center_median()
 
 
 def ED_uvedit_get_aspect_from_material(
@@ -150,7 +153,7 @@ def ED_uvedit_get_aspect_from_material(
         return r_aspx, r_aspy
 
     mat = obj.material_slots[material_index].material
-    if mat:
+    if mat and mat.node_tree:
         active_node = mat.node_tree.nodes.active
         if not active_node or active_node.bl_idname != "TEX_IMAGE":
             return r_aspx, r_aspy
@@ -229,8 +232,6 @@ def uv_map_clip_correct(
 ) -> None:
     """Heavially simplified translation of Blender's uv_map_clip_correct function."""
 
-    dx, dy = 0.0, 0.0
-    min, max = INIT_MINMAX2
     correct_aspect: bool = True
 
     if correct_aspect and per_face_aspect:
@@ -238,8 +239,8 @@ def uv_map_clip_correct(
 
 
 def uv_map_transform_calc_bounds(
-    bm: bmesh.types.BMesh, r_min: FloatBounds3, r_max: FloatBounds3
-) -> FloatBounds2x3:
+    bm: bmesh.types.BMesh, r_min: Vector, r_max: Vector
+) -> tuple[Vector, Vector]:
     """Translation of Blender's uv_map_transform_calc_bounds function.
 
     ./source/blender/editors/uvedit/uvedit_unwrap_ops.cc
@@ -253,54 +254,54 @@ def uv_map_transform_calc_bounds(
     return cur_r_min, cur_r_max
 
 
-def uv_map_transform_calc_center_median(
-    bm: bmesh.types.BMesh, r_center: FloatBounds3
-) -> FloatBounds3:
+def uv_map_transform_calc_center_median(bm: bmesh.types.BMesh) -> Vector:
     """Translation of Blender's uv_map_transform_calc_center_median function.
 
     ./source/blender/editors/uvedit/uvedit_unwrap_ops.cc
     Lines: 2287-2302
     """
-    cur_r_center: FloatBounds3 = (0, 0, 0)
+    cur_r_center: Vector = Vector((0, 0, 0))
     center_accum_num = 0
     for face in bm.faces:
         if not face.select:
             continue
         center = face.calc_center_median()
-        cur_r_center = add_v3_v3(cur_r_center, center)
+        cur_r_center = cur_r_center + center
         center_accum_num += 1
-    return mul_v3_fl(cur_r_center, 1.0 / center_accum_num)
+    return cur_r_center * (1.0 / center_accum_num)
 
 
 def uv_map_transform_center(
-    object: bpy.types.Object, bm: bmesh.types.BMesh, r_center: FloatBounds3
-) -> tuple[FloatBounds3, FloatBounds2x3]:
+    object: bpy.types.Object, bm: bmesh.types.BMesh
+) -> tuple[Vector, tuple[Vector, Vector]]:
     """Translationof Blender's uv_map_transform_center function.
 
     ./source/blender/editors/uvedit/uvedit_unwrap_ops.cc
     Lines: 2304-2359
     """
-    bounds: FloatBounds2x3 = INIT_MINMAX
-    cur_r_center = r_center
+    bounds: tuple[Vector, Vector] = INIT_MINMAX
+    cur_r_center = Vector((0, 0, 0))
     around: V3DAround = get_v3d_pivot()
     is_minmax_set: bool = False
 
-    # TODO: Implement support for CURSOR and ACTIVE
+    # TODO: Get CURSOR to have parity with Blender
     match around:
         case V3DAround.CENTER_BOUNDS:
             bounds = uv_map_transform_calc_bounds(bm, bounds[0], bounds[1])
             is_minmax_set = True
-            bounds = minmax_v3v3_v3(r_center, bounds[0], bounds[1])
+            cur_r_center = 0.5 * (bounds[0] + bounds[1])
         case V3DAround.CENTER_MEDIAN:
-            cur_r_center = uv_map_transform_calc_center_median(bm, r_center)
+            cur_r_center = uv_map_transform_calc_center_median(bm)
         case V3DAround.CURSOR:
-            pass
+            inverted = object.matrix_world.inverted()
+            if bpy.context.scene and inverted:
+                cur_r_center = mul_v3_m4v3(inverted, bpy.context.scene.cursor.location)
         case V3DAround.ACTIVE:
-            pass
+            selection_history = bm.select_history
+            if selection_history.active:
+                cur_r_center = BM_editselection_center(selection_history.active)
         case V3DAround.LOCAL_ORIGINS:
-            cur_r_center = (0, 0, 0)
-        case _:
-            cur_r_center = (0, 0, 0)
+            cur_r_center = Vector((0, 0, 0))
 
     if not is_minmax_set:
         bounds = uv_map_transform_calc_bounds(bm, bounds[0], bounds[1])
@@ -308,9 +309,7 @@ def uv_map_transform_center(
     return cur_r_center, bounds
 
 
-def axis_dominant_v3(
-    r_axis_a: int, r_axis_b: int, axis: FloatBounds3
-) -> tuple[int, int]:
+def axis_dominant_v3(axis: Vector) -> tuple[int, int]:
     """Translation of Blender's axis_dominant_v3 function.
 
     ./source/blender/blenlib/intern/math_geom_inline.cc
@@ -330,7 +329,7 @@ def uvedit_unwrap_cube_project(
     cube_size: float,
     use_select: bool,
     only_selected_uvs: bool,
-    center: FloatBounds3 | None = None,
+    center: Vector | None = None,
 ) -> None:
     """Translation of uvedit_unwrap_cube_project.
 
@@ -338,7 +337,7 @@ def uvedit_unwrap_cube_project(
     Lines: 4181-4227
     """
     cur_cube_size = cube_size
-    loc: FloatBounds3 = (0, 0, 0)
+    loc: Vector = Vector((0, 0, 0))
     cox, coy = 0, 0
 
     if center is not None:
@@ -353,7 +352,7 @@ def uvedit_unwrap_cube_project(
         elif only_selected_uvs and not face.uv_select:
             continue
 
-        cox, coy = axis_dominant_v3(cox, coy, face.normal)
+        cox, coy = axis_dominant_v3(face.normal)
         uv_layer = bm.loops.layers.uv.verify()
 
         for loop in face.loops:
@@ -383,14 +382,14 @@ def cube_project_exec(cube_size: float, objects: tuple[bpy.types.Object, ...]) -
             continue
 
         # Declare bounds variable in advanced.
-        bounds: FloatBounds2x3 | None = None
-        center: FloatBounds3 = (0, 0, 0)
+        bounds: tuple[Vector, Vector] | None = None
+        center: Vector = Vector((0, 0, 0))
 
-        center, bounds = uv_map_transform_center(obj, bm, center)
+        center, bounds = uv_map_transform_center(obj, bm)
 
         if bounds:
-            dims = sub_v3_v3v3(bounds[1], bounds[0])
-            cube_size = max(dims)
+            dims = bounds[1] - bounds[0]
+            cube_size = max(dims[0], dims[1], dims[2])
 
             if idx == 0:
                 # This doesn't fit well with multiple objects
